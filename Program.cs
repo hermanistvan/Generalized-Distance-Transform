@@ -44,19 +44,16 @@ public static class Program
                         var value = indexerHelper.Get(coord);
                         sumOverThisDistanceLevel += value;
                     }
-                    var tempsum = sumOverThisPixel + sumOverThisDistanceLevel;
-                    if (tempsum < referenceValue)
-                    {
-                        sumOverThisPixel = tempsum;
-                    }
-                    else if (tempsum == referenceValue)
+                    var previousSumOverThisPixel = sumOverThisPixel;
+                    sumOverThisPixel += sumOverThisDistanceLevel;
+                    if (sumOverThisPixel == referenceValue)
                     {
                         outimg[i, j] = distanceLevel;
                     }
-                    else if (tempsum > referenceValue)
+                    else if (sumOverThisPixel > referenceValue)
                     {
                         double fraction_remainder = 
-                                 ((double)(referenceValue - sumOverThisPixel))
+                                 ((double)(referenceValue - previousSumOverThisPixel))
                                 / ((double)sumOverThisDistanceLevel);
                         outimg[i, j] = distanceLevel + fraction_remainder;
                     }
@@ -107,16 +104,33 @@ public static class Program
         foreach (var coreCoord in coreCoords)
         {
             yield return coreCoord;
-            yield return (-coreCoord.Item1, coreCoord.Item2);
-            yield return (coreCoord.Item1, -coreCoord.Item2);
-            yield return (-coreCoord.Item1, -coreCoord.Item2);
-
+            if (coreCoord.Item1 != 0)
+            {
+                yield return (-coreCoord.Item1, coreCoord.Item2);
+            }
+            if (coreCoord.Item2 != 0)
+            {
+                yield return (coreCoord.Item1, -coreCoord.Item2);
+            }
+            if (coreCoord.Item1 != 0 && coreCoord.Item2 != 0)
+            {
+                yield return (-coreCoord.Item1, -coreCoord.Item2);
+            }
             if (coreCoord.Item1 != coreCoord.Item2)
             {
                 yield return (coreCoord.Item2, coreCoord.Item1);
-                yield return (-coreCoord.Item2, coreCoord.Item1);
-                yield return (coreCoord.Item2, -coreCoord.Item1);
-                yield return (-coreCoord.Item2, -coreCoord.Item1);
+                if (coreCoord.Item2 != 0)
+                {
+                    yield return (-coreCoord.Item2, coreCoord.Item1);
+                }
+                if (coreCoord.Item1 != 0)
+                {
+                    yield return (coreCoord.Item2, -coreCoord.Item1);
+                }
+                if (coreCoord.Item1 != 0 && coreCoord.Item2 != 0)
+                {
+                    yield return (-coreCoord.Item2, -coreCoord.Item1);
+                }
             }
 
         }
