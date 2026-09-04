@@ -1,51 +1,68 @@
 using System.ComponentModel;
+using System.Numerics;
 
 
 namespace GeneralizedDistanceTransform;
 
-public static class GeneralizedDistanceTransform
+public class GeneralizedDistanceTransform<T> 
+    where T : struct, IMinMaxValue<T>, IComparisonOperators<T, T, bool>, ISubtractionOperators<T, T, T>, IDivisionOperators<T, T, T>, IMultiplyOperators<T, T, T>
 {
-    public static double[,] GetTransformedImage<T>(T[,] img, int referenceValue) where T: struct
+    private int length0;
+    private int length1;
+    private DistanceCache distanceCache;
+    private T[,] img;
+
+    public GeneralizedDistanceTransform(T[,] img) 
+    {
+        length0 = img.GetLength(0);
+        length1 = img.GetLength(1);
+        this.img = Normalizator.NormalizeImage(img);
+        distanceCache = new DistanceCache(Math.Max(length0, length1));
+    }
+
+    public double[,] GetTransformedImage(int referenceValue) 
     {
         CheckType<T>();
-
-        var length0 = img.GetLength(0);
-        var length1 = img.GetLength(1);
-
-        DistanceCache distanceCache = new DistanceCache(Math.Max(length0, length1));
-        var indexerHelper = new IndexerHelper<T>(img, length0, length1);
 
         double[,] outimg = new double[length0, length1];
         for (int i = 0; i < length0; i++)
         {
             for (int j = 0; j < length1; j++)
             {
-                int sumOverThisPixel = 0;
+                double sumOverThisPixel = 0;
 
                 for (int distanceLevel = 0; 
                         sumOverThisPixel < referenceValue 
-                        && distanceLevel < distanceCache.NumberOfDistanceLevels; 
+                        && distanceLevel < distanceCache.Distances.Length; 
                     distanceLevel++)
                 {
-                    var absoluteCoords = distanceCache.GetAbsoluteCoordinatesToSpecificDistanceLevel(i, j, distanceLevel);
-                    int sumOverThisDistanceLevel = 0;
-                    foreach (var coord in absoluteCoords)
+                    var absoluteCoords = distanceCache.GetAbsoluteCoordinatesToSpecificDistanceLevel(i, j, distanceLevel, length0, length1);
+                    double sumOverThisDistanceLevel = 0;
+                    for (int k = 0; k < absoluteCoords.Count; k++)
                     {
-                        int value = Convert.ToInt32(indexerHelper.Get(coord));
+                        double value = Convert.ToDouble(img[absoluteCoords[k].i, absoluteCoords[k].j]); 
                         sumOverThisDistanceLevel += value;
                     }
                     var previousSumOverThisPixel = sumOverThisPixel;
                     sumOverThisPixel += sumOverThisDistanceLevel;
                     if (sumOverThisPixel == referenceValue)
                     {
-                        outimg[i, j] = distanceLevel;
+                        //outimg[i, j] = distanceLevel;
+                        outimg[i, j] = distanceCache.Distances[distanceLevel];
                     }
                     else if (sumOverThisPixel > referenceValue)
                     {
                         double fraction_remainder = 
                                  ((double)(referenceValue - previousSumOverThisPixel))
                                 / ((double)sumOverThisDistanceLevel);
-                        outimg[i, j] = distanceLevel + fraction_remainder;
+                        //outimg[i, j] = distanceLevel + fraction_remainder;
+                        double distanceBase = distanceLevel > 0 ?
+                                                distanceCache.Distances[distanceLevel - 1]:
+                                                0;
+                        double distancefractionRemainder = (distanceCache.Distances[distanceLevel]
+                                                           - distanceBase)
+                                                           * fraction_remainder;
+                        outimg[i, j] = distanceBase + distancefractionRemainder;
                     }
                 }
             }
@@ -73,124 +90,90 @@ public static class GeneralizedDistanceTransform
 
 }
 
-class IndexerHelper<T> where T : struct
-{
-    T[,] img;
-    int length0;
-    int length1;
-
-    public IndexerHelper(T[,] img, int length0, int length1)
-    {
-        this.img = img;
-        this.length0 = length0;
-        this.length1 = length1;
-    }
-
-    public T Get((int, int) coords)
-    {
-        int i = coords.Item1;
-        int j = coords.Item2;
-
-        if (i < 0
-         || i >= length0
-         || j < 0
-         || j >= length1)
-        {
-            return default(T);
-        }
-        else
-        {
-            return img[i, j];
-        }
-    }
-}
+internal record Coordinate(int i, int j);
 
 class DistanceCache
 {
-    Dictionary<double, SortedSet<(int, int)>> distanceCache;
+    internal double[] Distances { get; }
+    internal IReadOnlyList<Coordinate>[] CoordinateLists { get; }
 
-    internal DistanceCache(int n)
+
+    internal DistanceCache(int maxDimension)
     {
-        distanceCache = new Dictionary<double, SortedSet<(int, int)>>();
-        for (int i = 0; i < n; ++i)
+        SortedDictionary<double, List<Coordinate>> distanceCache = new SortedDictionary<double, List<Coordinate>>();
+        for (int i = 0; i < maxDimension; ++i)
         {
             for (int j = 0; j <= i; ++j)
             {
                 double id = i;
                 double jd = j;
                 double distance = Math.Sqrt(id * id + jd * jd);
-                if (!distanceCache.ContainsKey(distance))
-                {
-                    SortedSet<(int, int)> coords = new SortedSet<(int, int)>();
-                    coords.Add((i, j));
-                    distanceCache.Add(distance, coords);
 
-                }
-                else
+                if (!distanceCache.TryGetValue(distance, out var currentSet))
                 {
-                    distanceCache[distance].Add((i, j));
+                    currentSet = new List<Coordinate>();
+                    distanceCache.Add(distance, currentSet);
                 }
+                GenerateAndAddCoordinateVariants(i, j, currentSet);
             }
         }
+        Distances = distanceCache.Keys.ToArray();
+        CoordinateLists = distanceCache.Values.ToArray();
     }
 
-    internal int NumberOfDistanceLevels
-    {   get
-        {
-            return distanceCache.Keys.Count;
-        }
-    }
-
-    IEnumerable<(int, int)> getRelativeCoordinatesToSpecificDistanceLevel(int distanceLevel)
+    void GenerateAndAddCoordinateVariants(int i, int j, List<Coordinate> currentSet)
     {
-        double distance = distanceCache.Keys.OrderBy(x => x).ElementAt(distanceLevel);
-        var coreCoords = distanceCache[distance];
-        foreach (var coreCoord in coreCoords)
+        bool equal = i == j;
+        bool hasAnyZero = i == 0 || j == 0;
+        if (!equal && !hasAnyZero)
         {
-            yield return coreCoord;
-            if (coreCoord.Item1 != 0)
-            {
-                yield return (-coreCoord.Item1, coreCoord.Item2);
-            }
-            if (coreCoord.Item2 != 0)
-            {
-                yield return (coreCoord.Item1, -coreCoord.Item2);
-            }
-            if (coreCoord.Item1 != 0 && coreCoord.Item2 != 0)
-            {
-                yield return (-coreCoord.Item1, -coreCoord.Item2);
-            }
-            if (coreCoord.Item1 != coreCoord.Item2)
-            {
-                yield return (coreCoord.Item2, coreCoord.Item1);
-                if (coreCoord.Item2 != 0)
-                {
-                    yield return (-coreCoord.Item2, coreCoord.Item1);
-                }
-                if (coreCoord.Item1 != 0)
-                {
-                    yield return (coreCoord.Item2, -coreCoord.Item1);
-                }
-                if (coreCoord.Item1 != 0 && coreCoord.Item2 != 0)
-                {
-                    yield return (-coreCoord.Item2, -coreCoord.Item1);
-                }
-            }
+            currentSet.Add(new Coordinate(i, j));
+            currentSet.Add(new Coordinate(-i, j));
+            currentSet.Add(new Coordinate(i, -j));
+            currentSet.Add(new Coordinate(-i, -j));
 
+            currentSet.Add(new Coordinate(j, i));
+            currentSet.Add(new Coordinate(-j, i));
+            currentSet.Add(new Coordinate(j, -i));
+            currentSet.Add(new Coordinate(-j, -i));
+        }
+        else if (equal && !hasAnyZero)
+        {
+            currentSet.Add(new Coordinate(i, j));
+            currentSet.Add(new Coordinate(-i, j));
+            currentSet.Add(new Coordinate(i, -j));
+            currentSet.Add(new Coordinate(-i, -j));
+        }
+        else if (!equal && hasAnyZero)
+        {
+            int value = i + j; //only either of them is 0 so the sum will yield the non-zero element
+            currentSet.Add(new Coordinate(0, value));
+            currentSet.Add(new Coordinate(0, -value));
+            currentSet.Add(new Coordinate(value, 0));
+            currentSet.Add(new Coordinate(-value, 0));
+        }
+        else //if (equal && hasAnyZero) //both zero
+        {
+            currentSet.Add(new Coordinate(i, j)); //[0, 0]
         }
     }
 
-    IEnumerable<(int, int)> combineCoordinates(int i, int j, IEnumerable<(int, int)> diffs)
+    internal List<Coordinate> GetAbsoluteCoordinatesToSpecificDistanceLevel(int i, int j, int distanceLevel, int length0, int length1)
     {
-        foreach (var diff in diffs)
+        var relativeCoords = CoordinateLists[distanceLevel];
+        int count = relativeCoords.Count;
+        var absoluteCoords = new List<Coordinate>(count);
+        for (int k = 0; k < count; k++)
         {
-            yield return (i + diff.Item1, j + diff.Item2);
+            Coordinate coord = new(i + relativeCoords[k].i, j + relativeCoords[k].j);
+            if (coord.i >= 0
+                && coord.i < length0
+                && coord.j >= 0
+                && coord.j < length1)
+            {
+                absoluteCoords.Add(coord);
+            }
         }
-    }
-
-    internal IEnumerable<(int, int)>  GetAbsoluteCoordinatesToSpecificDistanceLevel(int i, int j, int distanceLevel)
-    {
-        var relativeCoords = getRelativeCoordinatesToSpecificDistanceLevel(distanceLevel);
-        return combineCoordinates(i, j, relativeCoords);
+        return absoluteCoords;
     }
 }
