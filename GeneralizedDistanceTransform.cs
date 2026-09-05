@@ -14,17 +14,17 @@ public class GeneralizedDistanceTransform<T>
 
     public GeneralizedDistanceTransform(T[,] img) 
     {
+        CheckType<T>();
         length0 = img.GetLength(0);
         length1 = img.GetLength(1);
         this.img = Normalizator.NormalizeImage(img);
-        distanceCache = new DistanceCache(Math.Max(length0, length1));
+        distanceCache = new DistanceCache(length0, length1);
     }
 
     public double[,] GetTransformedImage(int referenceValue) 
     {
-        CheckType<T>();
-
         double[,] outimg = new double[length0, length1];
+        Coordinate[] absoluteCoords = new Coordinate[distanceCache.maxCoordinateListCount];
         for (int i = 0; i < length0; i++)
         {
             for (int j = 0; j < length1; j++)
@@ -36,9 +36,10 @@ public class GeneralizedDistanceTransform<T>
                         && distanceLevel < distanceCache.Distances.Length; 
                     distanceLevel++)
                 {
-                    var absoluteCoords = distanceCache.GetAbsoluteCoordinatesToSpecificDistanceLevel(i, j, distanceLevel, length0, length1);
+                    //reuse the same array for the list of the required coordinates to avoid memory and garbage collector overhead
+                    byte absoluteCoordsCount = distanceCache.GetAbsoluteCoordinatesToSpecificDistanceLevel(i, j, distanceLevel, ref absoluteCoords);
                     double sumOverThisDistanceLevel = 0;
-                    for (int k = 0; k < absoluteCoords.Count; k++)
+                    for (int k = 0; k < absoluteCoordsCount; k++)
                     {
                         double value = Convert.ToDouble(img[absoluteCoords[k].i, absoluteCoords[k].j]); 
                         sumOverThisDistanceLevel += value;
@@ -96,14 +97,22 @@ class DistanceCache
 {
     internal double[] Distances { get; }
     internal IReadOnlyList<Coordinate>[] CoordinateLists { get; }
+    internal int maxCoordinateListCount { get; }
 
+    private int length0;
+    private int length1;
 
-    internal DistanceCache(int maxDimension)
+    internal DistanceCache(int length0, int length1)
     {
+        this.length0 = length0;
+        this.length1 = length1;
+        int maxDimension = Math.Max(length0, length1);
+        int mindimension = Math.Min(length0, length1);
+        int maxListLength = 0;
         SortedDictionary<double, List<Coordinate>> distanceCache = new SortedDictionary<double, List<Coordinate>>();
         for (int i = 0; i < maxDimension; ++i)
         {
-            for (int j = 0; j <= i; ++j)
+            for (int j = 0; j <= i && j < mindimension; ++j)
             {
                 double id = i;
                 double jd = j;
@@ -115,10 +124,13 @@ class DistanceCache
                     distanceCache.Add(distance, currentSet);
                 }
                 GenerateAndAddCoordinateVariants(i, j, currentSet);
+                int count = currentSet.Count;
+                if (currentSet.Count > maxListLength) maxListLength = count;
             }
         }
         Distances = distanceCache.Keys.ToArray();
         CoordinateLists = distanceCache.Values.ToArray();
+        maxCoordinateListCount = maxListLength; ;
     }
 
     void GenerateAndAddCoordinateVariants(int i, int j, List<Coordinate> currentSet)
@@ -158,12 +170,12 @@ class DistanceCache
         }
     }
 
-    internal List<Coordinate> GetAbsoluteCoordinatesToSpecificDistanceLevel(int i, int j, int distanceLevel, int length0, int length1)
+    internal byte GetAbsoluteCoordinatesToSpecificDistanceLevel(int i, int j, int distanceLevel, ref Coordinate[] absoluteCoordinates)
     {
         var relativeCoords = CoordinateLists[distanceLevel];
-        int count = relativeCoords.Count;
-        var absoluteCoords = new List<Coordinate>(count);
-        for (int k = 0; k < count; k++)
+        int relativeCoordsCount = relativeCoords.Count;
+        byte absoluteCoordsCount = 0;
+        for (int k = 0; k < relativeCoordsCount; k++)
         {
             Coordinate coord = new(i + relativeCoords[k].i, j + relativeCoords[k].j);
             if (coord.i >= 0
@@ -171,9 +183,11 @@ class DistanceCache
                 && coord.j >= 0
                 && coord.j < length1)
             {
-                absoluteCoords.Add(coord);
+                //reuse the same array for the list of the required coordinates to avoid memory and garbage collector overhead
+                absoluteCoordinates[absoluteCoordsCount] = coord;
+                absoluteCoordsCount++;
             }
         }
-        return absoluteCoords;
+        return absoluteCoordsCount;
     }
 }
